@@ -1,4 +1,4 @@
-<h1 align="center">🖼️ VisionVault</h1>
+<h1 align="center">VisionVault</h1>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-v3.8+-blue.svg" alt="Python">
@@ -12,13 +12,10 @@
   Automatically analyze, tag, and search through your image collections using state-of-the-art AI models.
 </p>
 
-
----
-
 ## 🌟 Features
 
-<table>
-<tr>
+<table align="center">
+<tr align>
 <td width="50%">
 
 **🤖 Dual AI Analysis**
