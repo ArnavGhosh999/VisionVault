@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-v3.8+-blue.svg" alt="Python">
-  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
+  <img src="https://img.shields.io/badge/license-BSD 2-Clause License.svg" alt="License">
   <img src="https://img.shields.io/badge/status-active-success.svg" alt="Status">
   <img src="https://img.shields.io/badge/AI-BLIP%20%2B%20LLaVA-purple.svg" alt="AI Models">
 </p>
