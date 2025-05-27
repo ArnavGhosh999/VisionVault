@@ -1,0 +1,23 @@
+# Core ML libraries
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Transformers and models  
+transformers>=4.35.0
+accelerate>=0.20.0
+sentence-transformers>=2.2.0
+
+# Image processing (no OpenCV to avoid conflicts)
+Pillow>=9.0.0
+numpy>=1.21.0,<2.0.0
+
+# Database
+lancedb>=0.3.0
+pyarrow>=10.0.0
+
+# Ollama client
+ollama>=0.1.0
+
+# Utilities
+tqdm>=4.64.0
