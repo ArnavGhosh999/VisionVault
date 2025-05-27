@@ -120,7 +120,7 @@ python main_simple.py
 </tr>
 </table>
 
----
+
 
 ## 🛠️ Tech Stack
 
@@ -176,7 +176,6 @@ graph TD
 
 </details>
 
----
 
 ## 📁 Project Structure
 
@@ -210,8 +209,6 @@ export DB_PATH=./image_database.db
 ```
 
 </details>
-
----
 
 
 ### Development Setup
