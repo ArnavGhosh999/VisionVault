@@ -45,7 +45,6 @@
 </tr>
 </table>
 
----
 
 ## 🚀 Quick Start
 
@@ -137,7 +136,6 @@ python main_simple.py
 
 </div>
 
----
 
 ## 🏗️ Architecture
 
@@ -163,8 +161,6 @@ graph TD
 
 </div>
 
----
-
 ## 📊 Performance
 
 <div align="center">
@@ -176,25 +172,6 @@ graph TD
 | **RTX 4070** | ~5 sec/image | 6-8GB RAM | Large collections |
 
 </div>
-
----
-
-## 🖼️ Supported Formats
-
-<p align="center">
-<img src="https://img.shields.io/badge/JPEG-✓-green?style=flat-square" alt="JPEG">
-<img src="https://img.shields.io/badge/PNG-✓-green?style=flat-square" alt="PNG">
-<img src="https://img.shields.io/badge/BMP-✓-green?style=flat-square" alt="BMP">
-<img src="https://img.shields.io/badge/TIFF-✓-green?style=flat-square" alt="TIFF">
-<img src="https://img.shields.io/badge/WebP-✓-green?style=flat-square" alt="WebP">
-</p>
-
----
-
-## 🔍 Example Searches
-
-<details>
-<summary><b>💡 Search Examples</b></summary>
 
 ```bash
 # Content-based searches
@@ -237,27 +214,6 @@ visionvault/
     └── 📄 troubleshooting.md
 ```
 
----
-
-## ⚙️ Configuration
-
-<details>
-<summary><b>🔧 Command Line Options</b></summary>
-
-```bash
-python main_simple.py [OPTIONS]
-
-Options:
-  --scan PATH        Directory path to scan for images
-  --search QUERY     Search query for images  
-  --db-path PATH     Database file path (default: ./image_database.db)
-  --limit NUMBER     Limit number of search results (default: 10)
-  --help            Show help message
-```
-
-</details>
-
-<details>
 <summary><b>🌍 Environment Variables</b></summary>
 
 ```bash
@@ -275,79 +231,6 @@ export DB_PATH=./image_database.db
 
 ---
 
-## 💾 Database Schema
-
-<details>
-<summary><b>📊 SQLite Database Structure</b></summary>
-
-```sql
-CREATE TABLE images (
-    id TEXT PRIMARY KEY,           -- SHA256 hash of file
-    file_path TEXT UNIQUE,         -- Absolute path to image
-    file_name TEXT,                -- Original filename
-    file_hash TEXT,                -- File hash for deduplication
-    created_at TEXT,               -- Processing timestamp
-    file_size INTEGER,             -- File size in bytes
-    width INTEGER,                 -- Image width
-    height INTEGER,                -- Image height
-    format TEXT,                   -- Image format (JPEG, PNG, etc.)
-    blip_analysis TEXT,            -- BLIP model analysis (JSON)
-    llava_analysis TEXT,           -- LLaVA model analysis (JSON)
-    tags TEXT,                     -- Generated tags (comma-separated)
-    search_text TEXT               -- Searchable text content
-);
-```
-
-</details>
-
----
-
-## 🐛 Troubleshooting
-
-<details>
-<summary><b>⚠️ Common Issues & Solutions</b></summary>
-
-**1. Ollama Connection Error**
-```bash
-# Make sure Ollama is running
-ollama serve
-
-# Check if vision models are installed
-ollama list
-```
-
-**2. Out of Memory Errors**  
-```bash
-# Use CPU-only mode
-export CUDA_VISIBLE_DEVICES=""
-```
-
-**3. Model Download Issues**
-```bash
-# Clear Hugging Face cache
-rm -rf ~/.cache/huggingface/
-
-# Retry model download
-python -c "from transformers import BlipProcessor; BlipProcessor.from_pretrained('Salesforce/blip-image-captioning-base')"
-```
-
-**4. Permission Errors**
-```bash
-# Ensure read access to image directories
-chmod -R +r /path/to/images
-```
-
-</details>
-
----
-
-## 🤝 Contributing
-
-<p align="center">
-We welcome contributions! Please see our <a href="CONTRIBUTING.md">Contributing Guidelines</a> for details.
-</p>
-
-<div align="center">
 
 ### Development Setup
 
@@ -371,40 +254,6 @@ isort .
 
 ---
 
-## 📄 License
-
-<p align="center">
-This project is licensed under the MIT License - see the <a href="LICENSE">LICENSE</a> file for details.
-</p>
-
----
-
-## 🙏 Acknowledgments
-
-<div align="center">
-
-**Built with amazing open-source technologies:**
-
-<a href="https://github.com/salesforce/BLIP"><img src="https://img.shields.io/badge/Salesforce-BLIP-blue?style=flat-square&logo=salesforce" alt="BLIP"></a>
-<a href="https://llava-vl.github.io/"><img src="https://img.shields.io/badge/LLaVA-Vision%20Language-purple?style=flat-square" alt="LLaVA"></a>
-<a href="https://ollama.ai/"><img src="https://img.shields.io/badge/Ollama-Local%20AI-orange?style=flat-square" alt="Ollama"></a>
-<a href="https://huggingface.co/"><img src="https://img.shields.io/badge/🤗-Hugging%20Face-yellow?style=flat-square" alt="Hugging Face"></a>
-
-</div>
-
----
-
-## 📞 Support
-
-<div align="center">
-
-<a href="https://github.com/yourusername/visionvault/issues"><img src="https://img.shields.io/badge/Issues-GitHub-red?style=flat-square&logo=github" alt="Issues"></a>
-<a href="https://github.com/yourusername/visionvault/discussions"><img src="https://img.shields.io/badge/Discussions-GitHub-blue?style=flat-square&logo=github" alt="Discussions"></a>
-<a href="mailto:your.email@example.com"><img src="https://img.shields.io/badge/Email-Contact-green?style=flat-square&logo=gmail" alt="Email"></a>
-
-</div>
-
----
 
 ## 🗺️ Roadmap
 
@@ -420,17 +269,4 @@ This project is licensed under the MIT License - see the <a href="LICENSE">LICEN
 
 </details>
 
----
-
-<div align="center">
-  
-**⭐ Star this repository if you find it helpful!**
-
-<a href="https://github.com/yourusername/visionvault/stargazers"><img src="https://img.shields.io/github/stars/yourusername/visionvault?style=social" alt="GitHub stars"></a>
-<a href="https://github.com/yourusername/visionvault/network/members"><img src="https://img.shields.io/github/forks/yourusername/visionvault?style=social" alt="GitHub forks"></a>
-
----
-
-<sub>Made with ❤️ by <a href="https://github.com/yourusername">Your Name</a></sub>
-
-</div>
+-
