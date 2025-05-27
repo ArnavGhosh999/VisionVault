@@ -161,7 +161,7 @@ graph TD
 
 </div>
 
-## 📊 Performance
+## Performance
 
 <div align="center">
 
@@ -173,24 +173,6 @@ graph TD
 
 </div>
 
-```bash
-# Content-based searches
-python main_simple.py --search "dogs playing in park"
-python main_simple.py --search "code screenshots"
-python main_simple.py --search "van gogh style paintings"
-
-# Color-based searches  
-python main_simple.py --search "images with blue sky"
-python main_simple.py --search "yellow flowers"
-
-# Scene-based searches
-python main_simple.py --search "indoor office scenes"
-python main_simple.py --search "outdoor nature photos"
-
-# Activity-based searches
-python main_simple.py --search "people eating food"
-python main_simple.py --search "cars on highway"
-```
 
 </details>
 
@@ -252,21 +234,3 @@ isort .
 
 </div>
 
----
-
-
-## 🗺️ Roadmap
-
-<details>
-<summary><b>🚀 Future Features</b></summary>
-
-- [ ] **🌐 Web Interface**: Browser-based UI for easier interaction
-- [ ] **🔍 Advanced Search**: Vector similarity search with embeddings  
-- [ ] **⚡ Batch Processing**: Parallel processing for faster scanning
-- [ ] **☁️ Cloud Integration**: Optional cloud storage and sync
-- [ ] **📱 Mobile App**: Mobile application for image tagging
-- [ ] **🔌 Plugin System**: Extensible architecture for custom analyzers
-
-</details>
-
--
