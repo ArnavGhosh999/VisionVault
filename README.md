@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <strong>An intelligent image analysis and tagging system powered by Vision-Language Models (VLMs)</strong><br>
+  <strong>An intelligent image analysis and tagging system powered by Vision-Language Models (VLMs) - Llava and BLIP</strong><br>
   Automatically analyze, tag, and search through your image collections using state-of-the-art AI models.
 </p>
 
