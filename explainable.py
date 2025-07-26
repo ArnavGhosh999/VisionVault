@@ -320,7 +320,7 @@ class PDFAnalysisScanner:
     
     def scan_pdf_report(self, pdf_path: str) -> List[Dict[str, Any]]:
         """
-        Scan PDF report and extract image information and tags
+        Enhanced PDF scanning with better image extraction
         """
         try:
             pdf_path = Path(pdf_path)
@@ -336,51 +336,91 @@ class PDFAnalysisScanner:
             doc = fitz.open(str(pdf_path))
             extracted_data = []
             
-            current_image_data = None
+            logger.info(f"📄 PDF has {len(doc)} pages")
             
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
+                logger.info(f"🔍 Processing page {page_num + 1}/{len(doc)}")
                 
                 # Extract text from page
                 text = page.get_text()
                 
                 # Extract images from page
                 image_list = page.get_images()
+                logger.info(f"📷 Found {len(image_list)} images on page {page_num + 1}")
                 
                 # Parse text for image information
                 image_info = self._parse_page_text(text, page_num)
                 
-                # Extract actual images
+                # Extract actual images with better error handling
                 for img_index, img in enumerate(image_list):
                     try:
                         # Get image data
                         xref = img[0]
+                        
+                        # Get the image
                         pix = fitz.Pixmap(doc, xref)
                         
+                        # Skip images that are too small (likely UI elements)
+                        if pix.width < 50 or pix.height < 50:
+                            logger.info(f"⏩ Skipping small image ({pix.width}x{pix.height})")
+                            pix = None
+                            continue
+                        
+                        # Convert to RGB if needed
                         if pix.n - pix.alpha < 4:  # GRAY or RGB
+                            if pix.n - pix.alpha == 1:  # GRAY
+                                # Convert grayscale to RGB
+                                pix_rgb = fitz.Pixmap(fitz.csRGB, pix)
+                                pix = None
+                                pix = pix_rgb
+                            
+                            # Convert to bytes
                             img_data = pix.tobytes("png")
+                            
+                            # Create PIL Image
                             img_pil = Image.open(io.BytesIO(img_data))
                             
+                            # Ensure RGB mode
+                            if img_pil.mode != 'RGB':
+                                img_pil = img_pil.convert('RGB')
+                            
+                            logger.info(f"✅ Extracted image {img_index + 1}: {img_pil.size}")
+                            
                             # Store image with parsed information
-                            if image_info:
-                                image_record = {
-                                    "page_number": page_num + 1,
-                                    "image_index": img_index,
-                                    "image": img_pil,
-                                    "extracted_info": image_info,
-                                    "image_data": img_data
-                                }
-                                extracted_data.append(image_record)
+                            image_record = {
+                                "page_number": page_num + 1,
+                                "image_index": img_index + 1,
+                                "image": img_pil,
+                                "extracted_info": image_info,
+                                "image_data": img_data,
+                                "image_size": img_pil.size,
+                                "extraction_method": "fitz_pixmap"
+                            }
+                            extracted_data.append(image_record)
                         
-                        pix = None  # Free memory
+                        else:
+                            logger.warning(f"⚠️ Skipping CMYK or complex image {img_index + 1}")
+                        
+                        if pix:
+                            pix = None  # Free memory
                         
                     except Exception as e:
-                        logger.warning(f"⚠️ Failed to extract image {img_index} from page {page_num + 1}: {e}")
+                        logger.warning(f"⚠️ Failed to extract image {img_index + 1} from page {page_num + 1}: {e}")
                         continue
             
             doc.close()
             
-            logger.info(f"✅ Extracted {len(extracted_data)} images from PDF")
+            logger.info(f"✅ Successfully extracted {len(extracted_data)} images from PDF")
+            
+            if len(extracted_data) == 0:
+                logger.warning("⚠️ No images were extracted from the PDF")
+                logger.info("💡 This could mean:")
+                logger.info("   • PDF doesn't contain embedded images")
+                logger.info("   • Images are in unsupported format")
+                logger.info("   • PDF is password protected")
+                logger.info("   • Images are too small (< 50x50 pixels)")
+            
             return extracted_data
             
         except Exception as e:
@@ -503,28 +543,107 @@ pdf_scanner = PDFAnalysisScanner()
 print("✅ PDF Scanner initialized successfully!")
 
 """
-Cell 4: Explainable AI Analyzer
-Main analyzer that combines PDF scanning with Kosmos-2 explanations
+Cell 4: Explainable AI Analyzer with Dataset Integration
+Main analyzer that combines PDF scanning with Kosmos-2 explanations and dataset validation
 """
 
 class ExplainableImageTagAnalyzer:
     """
-    Main analyzer for generating explanations of image tags using Kosmos-2
+    Main analyzer for generating explanations of image tags using Kosmos-2 with dataset integration
     """
     
     def __init__(self):
         self.kosmos_explainer = kosmos_explainer
         self.pdf_scanner = pdf_scanner
         self.analysis_results = []
+        self.dataset_path = None
+        self.dataset_images = {}
+        self.comparison_results = {}
     
-    def analyze_pdf_report(self, pdf_path: str) -> List[Dict[str, Any]]:
+    def load_dataset(self, dataset_path: str) -> bool:
         """
-        Analyze a PDF report and generate explanations for each image's tags
+        Load the original dataset directory for image comparison
         """
         try:
-            logger.info(f"🔍 Starting analysis of PDF report: {pdf_path}")
+            dataset_path = Path(dataset_path)
+            if not dataset_path.exists():
+                raise FileNotFoundError(f"Dataset directory not found: {dataset_path}")
             
-            # 1. Scan PDF and extract images
+            logger.info(f"📁 Loading dataset from: {dataset_path}")
+            
+            # Supported image formats
+            image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}
+            
+            # Scan dataset directory for images
+            self.dataset_images = {}
+            image_count = 0
+            
+            for file_path in dataset_path.rglob("*"):
+                if file_path.is_file() and file_path.suffix.lower() in image_extensions:
+                    # Use filename as key for matching
+                    filename = file_path.name.lower()
+                    self.dataset_images[filename] = {
+                        'full_path': str(file_path),
+                        'filename': file_path.name,
+                        'size': file_path.stat().st_size,
+                        'extension': file_path.suffix.lower()
+                    }
+                    image_count += 1
+            
+            self.dataset_path = str(dataset_path)
+            logger.info(f"✅ Loaded {image_count} images from dataset")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to load dataset: {e}")
+            return False
+    
+    def find_matching_dataset_image(self, pdf_image_name: str) -> Dict[str, Any]:
+        """
+        Find matching image in dataset based on filename
+        """
+        try:
+            # Clean the PDF image name
+            pdf_name = Path(pdf_image_name).name.lower()
+            
+            # Direct match
+            if pdf_name in self.dataset_images:
+                return self.dataset_images[pdf_name]
+            
+            # Try without extension
+            pdf_name_no_ext = Path(pdf_image_name).stem.lower()
+            for dataset_name, dataset_info in self.dataset_images.items():
+                dataset_name_no_ext = Path(dataset_name).stem.lower()
+                if pdf_name_no_ext == dataset_name_no_ext:
+                    return dataset_info
+            
+            # Partial match (for cases with prefixes/suffixes)
+            for dataset_name, dataset_info in self.dataset_images.items():
+                dataset_name_no_ext = Path(dataset_name).stem.lower()
+                if pdf_name_no_ext in dataset_name_no_ext or dataset_name_no_ext in pdf_name_no_ext:
+                    return dataset_info
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error finding matching image: {e}")
+            return None
+    
+    def analyze_pdf_report_with_dataset(self, pdf_path: str, dataset_path: str) -> List[Dict[str, Any]]:
+        """
+        Analyze a PDF report with dataset integration and comparison
+        """
+        try:
+            logger.info(f"🔍 Starting enhanced analysis with dataset integration...")
+            logger.info(f"📄 PDF Path: {pdf_path}")
+            logger.info(f"📁 Dataset Path: {dataset_path}")
+            
+            # 1. Load dataset
+            if not self.load_dataset(dataset_path):
+                raise ValueError("Failed to load dataset")
+            
+            # 2. Scan PDF and extract images
             extracted_images = self.pdf_scanner.scan_pdf_report(pdf_path)
             
             if not extracted_images:
@@ -533,8 +652,9 @@ class ExplainableImageTagAnalyzer:
             
             logger.info(f"📊 Found {len(extracted_images)} images to analyze")
             
-            # 2. Generate explanations for each image
+            # 3. Generate explanations and compare with dataset
             results = []
+            matched_count = 0
             
             for i, image_data in enumerate(extracted_images, 1):
                 logger.info(f"🔬 Analyzing image {i}/{len(extracted_images)}")
@@ -544,6 +664,26 @@ class ExplainableImageTagAnalyzer:
                     image = image_data["image"]
                     extracted_info = image_data["extracted_info"]
                     existing_tags = extracted_info.get("ai_tags", [])
+                    pdf_filename = extracted_info.get("file_name", f"Image_{i}")
+                    
+                    # Find matching dataset image
+                    dataset_match = self.find_matching_dataset_image(pdf_filename)
+                    
+                    # Load original image from dataset if found
+                    original_image = None
+                    match_status = "not_found"
+                    
+                    if dataset_match:
+                        try:
+                            original_image = Image.open(dataset_match['full_path'])
+                            match_status = "matched"
+                            matched_count += 1
+                            logger.info(f"✅ Found matching dataset image: {dataset_match['filename']}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not load dataset image: {e}")
+                            match_status = "load_error"
+                    else:
+                        logger.warning(f"⚠️ No matching dataset image found for: {pdf_filename}")
                     
                     if not existing_tags:
                         logger.warning(f"⚠️ No tags found for image {i}, skipping...")
@@ -552,18 +692,25 @@ class ExplainableImageTagAnalyzer:
                     # Generate explanations using Kosmos-2
                     explanations = self.kosmos_explainer.generate_explanation(image, existing_tags)
                     
-                    # Compile analysis result
+                    # Compare images if both are available
+                    comparison_result = self._compare_images(image, original_image) if original_image else None
+                    
+                    # Compile analysis result with dataset integration
                     analysis_result = {
                         "image_index": i,
                         "page_number": image_data["page_number"],
-                        "file_name": extracted_info.get("file_name", f"Image_{i}"),
+                        "file_name": pdf_filename,
                         "file_path": extracted_info.get("file_path", "Unknown"),
                         "original_tags": existing_tags,
                         "blip_caption": extracted_info.get("blip_caption"),
                         "llava_description": extracted_info.get("llava_description"),
                         "kosmos_explanations": explanations,
                         "analysis_timestamp": datetime.now().isoformat(),
-                        "image_object": image  # Store for report generation
+                        "pdf_image_object": image,  # Image from PDF
+                        "dataset_match": dataset_match,
+                        "original_image_object": original_image,  # Original image from dataset
+                        "match_status": match_status,
+                        "image_comparison": comparison_result
                     }
                     
                     results.append(analysis_result)
@@ -574,14 +721,113 @@ class ExplainableImageTagAnalyzer:
                     logger.error(f"❌ Failed to analyze image {i}: {e}")
                     continue
             
+            # 4. Generate comparison summary
+            self.comparison_results = {
+                "total_pdf_images": len(extracted_images),
+                "total_dataset_images": len(self.dataset_images),
+                "matched_images": matched_count,
+                "unmatched_images": len(extracted_images) - matched_count,
+                "match_percentage": round((matched_count / len(extracted_images)) * 100, 2) if extracted_images else 0,
+                "analysis_timestamp": datetime.now().isoformat()
+            }
+            
             self.analysis_results = results
-            logger.info(f"🎉 Analysis complete! Generated explanations for {len(results)} images")
+            logger.info(f"🎉 Enhanced analysis complete!")
+            logger.info(f"📊 Dataset matching: {matched_count}/{len(extracted_images)} images matched ({self.comparison_results['match_percentage']}%)")
             
             return results
             
         except Exception as e:
-            logger.error(f"❌ Failed to analyze PDF report: {e}")
+            logger.error(f"❌ Failed to analyze PDF report with dataset: {e}")
             return []
+    
+    def _compare_images(self, pdf_image: Image.Image, original_image: Image.Image) -> Dict[str, Any]:
+        """
+        Compare PDF image with original dataset image
+        """
+        try:
+            comparison = {
+                "dimensions_match": False,
+                "size_difference": None,
+                "format_match": False,
+                "visual_similarity": "unknown"
+            }
+            
+            # Compare dimensions
+            pdf_size = pdf_image.size
+            orig_size = original_image.size
+            
+            comparison["pdf_dimensions"] = pdf_size
+            comparison["original_dimensions"] = orig_size
+            comparison["dimensions_match"] = pdf_size == orig_size
+            
+            # Calculate size difference
+            if orig_size[0] > 0 and orig_size[1] > 0:
+                size_ratio = (pdf_size[0] * pdf_size[1]) / (orig_size[0] * orig_size[1])
+                comparison["size_ratio"] = round(size_ratio, 3)
+                comparison["size_difference"] = "similar" if 0.8 <= size_ratio <= 1.2 else "different"
+            
+            # Basic visual similarity (simplified)
+            try:
+                # Convert both to same mode for comparison
+                pdf_rgb = pdf_image.convert('RGB')
+                orig_rgb = original_image.convert('RGB')
+                
+                # Resize to same size for comparison
+                compare_size = (128, 128)
+                pdf_resized = pdf_rgb.resize(compare_size)
+                orig_resized = orig_rgb.resize(compare_size)
+                
+                # Simple pixel difference calculation
+                pdf_array = np.array(pdf_resized)
+                orig_array = np.array(orig_resized)
+                
+                diff = np.mean(np.abs(pdf_array.astype(float) - orig_array.astype(float)))
+                similarity_score = max(0, 100 - (diff / 255 * 100))
+                
+                comparison["similarity_score"] = round(similarity_score, 2)
+                
+                if similarity_score > 90:
+                    comparison["visual_similarity"] = "very_high"
+                elif similarity_score > 70:
+                    comparison["visual_similarity"] = "high"
+                elif similarity_score > 50:
+                    comparison["visual_similarity"] = "medium"
+                else:
+                    comparison["visual_similarity"] = "low"
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Visual similarity calculation failed: {e}")
+                comparison["visual_similarity"] = "calculation_failed"
+            
+            return comparison
+            
+        except Exception as e:
+            logger.error(f"❌ Image comparison failed: {e}")
+            return {"error": str(e)}
+    
+    def get_comparison_summary(self) -> Dict[str, Any]:
+        """
+        Get summary of dataset comparison results
+        """
+        return self.comparison_results
+    
+    def get_unmatched_images(self) -> List[str]:
+        """
+        Get list of images that couldn't be matched with dataset
+        """
+        unmatched = []
+        for result in self.analysis_results:
+            if result.get("match_status") != "matched":
+                unmatched.append(result.get("file_name", "Unknown"))
+        return unmatched
+    
+    def analyze_pdf_report(self, pdf_path: str) -> List[Dict[str, Any]]:
+        """
+        Legacy method - now requires dataset path
+        """
+        logger.warning("⚠️ analyze_pdf_report() is deprecated. Use analyze_pdf_report_with_dataset() instead")
+        raise ValueError("Dataset path is now required. Use analyze_pdf_report_with_dataset(pdf_path, dataset_path) instead")
     
     def get_tag_explanation(self, image_index: int, tag: str) -> str:
         """
@@ -605,7 +851,7 @@ class ExplainableImageTagAnalyzer:
     
     def generate_summary_statistics(self) -> Dict[str, Any]:
         """
-        Generate summary statistics of the analysis
+        Generate enhanced summary statistics including dataset comparison
         """
         try:
             if not self.analysis_results:
@@ -617,19 +863,25 @@ class ExplainableImageTagAnalyzer:
                 "average_tags_per_image": 0,
                 "most_common_tags": {},
                 "explanation_confidence": [],
-                "processing_timestamp": datetime.now().isoformat()
+                "processing_timestamp": datetime.now().isoformat(),
+                "dataset_integration": self.comparison_results
             }
             
             all_tags = []
             total_tags = 0
+            matched_images = 0
             
             for result in self.analysis_results:
                 tags = result["original_tags"]
                 all_tags.extend(tags)
                 total_tags += len(tags)
+                
+                if result.get("match_status") == "matched":
+                    matched_images += 1
             
             stats["total_tags_explained"] = total_tags
             stats["average_tags_per_image"] = round(total_tags / len(self.analysis_results), 2)
+            stats["matched_images_count"] = matched_images
             
             # Count tag frequency
             tag_counts = {}
@@ -648,41 +900,542 @@ class ExplainableImageTagAnalyzer:
     
     def save_results_to_json(self, output_path: str = None) -> str:
         """
-        Save analysis results to JSON file
+        Save enhanced analysis results to JSON file
         """
         try:
             if output_path is None:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_path = f"explainable_ai_analysis_{timestamp}.json"
+                output_path = f"enhanced_explainable_ai_analysis_{timestamp}.json"
             
             # Prepare data for JSON (remove image objects)
             json_data = {
                 "analysis_metadata": {
                     "total_images": len(self.analysis_results),
                     "analysis_timestamp": datetime.now().isoformat(),
-                    "model_used": "microsoft/kosmos-2-patch14-224"
+                    "model_used": "microsoft/kosmos-2-patch14-224",
+                    "dataset_path": self.dataset_path,
+                    "features": ["dataset_integration", "image_comparison", "explainable_ai"]
                 },
+                "dataset_comparison": self.comparison_results,
                 "summary_statistics": self.generate_summary_statistics(),
                 "image_analyses": []
             }
             
             for result in self.analysis_results:
-                json_result = {k: v for k, v in result.items() if k != "image_object"}
+                json_result = {k: v for k, v in result.items() 
+                             if k not in ["pdf_image_object", "original_image_object"]}
                 json_data["image_analyses"].append(json_result)
             
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(json_data, f, indent=2, ensure_ascii=False)
             
-            logger.info(f"💾 Analysis results saved to: {output_path}")
+            logger.info(f"💾 Enhanced analysis results saved to: {output_path}")
             return output_path
             
         except Exception as e:
             logger.error(f"❌ Failed to save results to JSON: {e}")
             return ""
 
-# Initialize the explainable analyzer
+# Initialize the enhanced explainable analyzer
 explainable_analyzer = ExplainableImageTagAnalyzer()
-print("✅ Explainable AI Analyzer initialized successfully!")
+print("✅ Enhanced Explainable AI Analyzer with Dataset Integration initialized!")
+
+"""
+Cell 5: Enhanced Explainable AI Report Generator with Dataset Integration
+Generate comprehensive PDF reports with explanations and image comparisons
+"""
+
+class ExplainableAIReportGenerator:
+    """
+    Generate PDF reports with explainable AI analysis and dataset comparison
+    """
+    
+    def __init__(self):
+        self.styles = getSampleStyleSheet()
+        self.title_style = ParagraphStyle(
+            'ExplainableTitle',
+            parent=self.styles['Heading1'],
+            fontSize=26,
+            spaceAfter=30,
+            textColor=colors.darkblue,
+            alignment=1  # Center alignment
+        )
+        self.section_style = ParagraphStyle(
+            'SectionHeading',
+            parent=self.styles['Heading2'],
+            fontSize=18,
+            spaceAfter=15,
+            textColor=colors.darkgreen
+        )
+        self.subsection_style = ParagraphStyle(
+            'SubsectionHeading',
+            parent=self.styles['Heading3'],
+            fontSize=14,
+            spaceAfter=10,
+            textColor=colors.darkred
+        )
+        self.explanation_style = ParagraphStyle(
+            'ExplanationStyle',
+            parent=self.styles['Normal'],
+            fontSize=11,
+            leftIndent=20,
+            rightIndent=20,
+            spaceAfter=8,
+            textColor=colors.black
+        )
+        self.tag_style = ParagraphStyle(
+            'TagExplanationStyle',
+            parent=self.styles['Normal'],
+            fontSize=10,
+            leftIndent=30,
+            textColor=colors.blue,
+            spaceAfter=5
+        )
+        self.comparison_style = ParagraphStyle(
+            'ComparisonStyle',
+            parent=self.styles['Normal'],
+            fontSize=10,
+            leftIndent=15,
+            textColor=colors.darkred,
+            spaceAfter=5
+        )
+    
+    def create_explainable_report(self, analysis_results: List[Dict[str, Any]], 
+                                output_path: str = None) -> str:
+        """
+        Create comprehensive explainable AI report with dataset comparison
+        """
+        try:
+            if output_path is None:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_path = f"enhanced_explainable_ai_report_{timestamp}.pdf"
+            
+            logger.info(f"📊 Generating enhanced explainable AI report...")
+            
+            doc = SimpleDocTemplate(output_path, pagesize=A4)
+            story = []
+            
+            # Title page
+            story.append(Paragraph("Enhanced Explainable AI Image Tagging Report", self.title_style))
+            story.append(Paragraph("Generated using Kosmos-2 Vision-Language Model with Dataset Integration", 
+                                 self.styles['Normal']))
+            story.append(Spacer(1, 30))
+            
+            # Executive summary with dataset comparison
+            story.append(Paragraph("Executive Summary", self.section_style))
+            
+            # Generate enhanced statistics
+            stats = self._generate_enhanced_statistics(analysis_results)
+            
+            summary_data = [
+                ['Total Images Analyzed:', str(stats['total_images'])],
+                ['Images Matched with Dataset:', f"{stats['matched_images']}/{stats['total_images']} ({stats['match_percentage']}%)"],
+                ['Total Tags Explained:', str(stats['total_tags'])],
+                ['Average Tags per Image:', str(stats['avg_tags'])],
+                ['Most Common Tag:', stats['most_common_tag']],
+                ['Analysis Model:', 'Kosmos-2 (microsoft/kosmos-2-patch14-224)'],
+                ['Dataset Integration:', 'Enabled' if stats['dataset_enabled'] else 'Disabled'],
+                ['Report Generated:', datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+            ]
+            
+            summary_table = Table(summary_data, colWidths=[3*inch, 3*inch])
+            summary_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.lightblue),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 11),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+                ('GRID', (0, 0), (-1, -1), 1, colors.darkblue)
+            ]))
+            
+            story.append(summary_table)
+            
+            # Dataset comparison summary if available
+            if stats.get('dataset_comparison'):
+                story.append(Spacer(1, 20))
+                story.append(Paragraph("Dataset Comparison Summary", self.subsection_style))
+                
+                comparison_stats = stats['dataset_comparison']
+                comparison_data = [
+                    ['PDF Images Found:', str(comparison_stats.get('total_pdf_images', 0))],
+                    ['Dataset Images Available:', str(comparison_stats.get('total_dataset_images', 0))],
+                    ['Successfully Matched:', str(comparison_stats.get('matched_images', 0))],
+                    ['Unmatched Images:', str(comparison_stats.get('unmatched_images', 0))],
+                    ['Match Success Rate:', f"{comparison_stats.get('match_percentage', 0)}%"]
+                ]
+                
+                comparison_table = Table(comparison_data, colWidths=[3*inch, 2*inch])
+                comparison_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, -1), colors.lightyellow),
+                    ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.orange)
+                ]))
+                
+                story.append(comparison_table)
+            
+            story.append(PageBreak())
+            
+            # Methodology section
+            story.append(Paragraph("Methodology", self.section_style))
+            methodology_text = """
+            This enhanced report provides explainable AI analysis of image tagging results using Microsoft's Kosmos-2 
+            vision-language model with dataset integration. For each image and its automatically generated tags, the system:
+            
+            1. Matches PDF images with original dataset images for validation
+            2. Provides general visual understanding and description using Kosmos-2
+            3. Generates specific explanations for why each tag was assigned
+            4. Includes confidence assessment of visual elements
+            5. Compares image quality and dimensions between PDF and original versions
+            
+            The analysis helps understand the reasoning behind AI-generated tags while ensuring data integrity 
+            through dataset comparison, improving transparency and trust in automated image tagging systems.
+            """
+            story.append(Paragraph(methodology_text, self.styles['Normal']))
+            story.append(Spacer(1, 20))
+            
+            # Individual image analyses with dataset comparison
+            story.append(Paragraph("Detailed Image Analyses with Dataset Comparison", self.section_style))
+            story.append(PageBreak())
+            
+            for i, result in enumerate(analysis_results, 1):
+                try:
+                    # Image header
+                    story.append(Paragraph(f"Analysis {i}: {result['file_name']}", 
+                                         self.section_style))
+                    
+                    # Dataset match status
+                    match_status = result.get('match_status', 'unknown')
+                    if match_status == 'matched':
+                        story.append(Paragraph("✅ Dataset Match: Successfully matched with original image", 
+                                             self.comparison_style))
+                    elif match_status == 'not_found':
+                        story.append(Paragraph("⚠️ Dataset Match: No matching image found in dataset", 
+                                             self.comparison_style))
+                    else:
+                        story.append(Paragraph("❌ Dataset Match: Error loading original image", 
+                                             self.comparison_style))
+                    
+                    story.append(Spacer(1, 10))
+                    
+                    # Create enhanced content table with both images if available
+                    content_data = []
+                    
+                    # Images section - show both PDF and original if available
+                    images_content = []
+                    
+                    # PDF Image
+                    if "pdf_image_object" in result:
+                        try:
+                            img = result["pdf_image_object"]
+                            img.thumbnail((200, 200), Image.Resampling.LANCZOS)
+                            
+                            img_buffer = io.BytesIO()
+                            img.save(img_buffer, format='PNG')
+                            img_buffer.seek(0)
+                            
+                            from reportlab.lib.utils import ImageReader
+                            rl_img = ImageReader(img_buffer)
+                            
+                            from reportlab.platypus import Image as RLImage
+                            images_content.append(Paragraph("<b>PDF Image:</b>", self.styles['Normal']))
+                            images_content.append(RLImage(rl_img, width=2*inch, height=2*inch))
+                            
+                        except Exception as e:
+                            images_content.append(Paragraph(f"[PDF Image error: {e}]", self.styles['Normal']))
+                    
+                    # Original Dataset Image
+                    if result.get('match_status') == 'matched' and "original_image_object" in result:
+                        try:
+                            orig_img = result["original_image_object"]
+                            orig_img.thumbnail((200, 200), Image.Resampling.LANCZOS)
+                            
+                            orig_buffer = io.BytesIO()
+                            orig_img.save(orig_buffer, format='PNG')
+                            orig_buffer.seek(0)
+                            
+                            orig_rl_img = ImageReader(orig_buffer)
+                            
+                            images_content.append(Spacer(1, 10))
+                            images_content.append(Paragraph("<b>Original Dataset Image:</b>", self.styles['Normal']))
+                            images_content.append(RLImage(orig_rl_img, width=2*inch, height=2*inch))
+                            
+                        except Exception as e:
+                            images_content.append(Paragraph(f"[Original image error: {e}]", self.styles['Normal']))
+                    else:
+                        images_content.append(Spacer(1, 10))
+                        images_content.append(Paragraph("<b>Original Dataset Image:</b>", self.styles['Normal']))
+                        images_content.append(Paragraph("[Not available]", self.styles['Normal']))
+                    
+                    # Analysis content column
+                    analysis_content = []
+                    
+                    # Basic information
+                    analysis_content.append(Paragraph("<b>Image Information:</b>", self.styles['Normal']))
+                    analysis_content.append(Paragraph(f"File: {result.get('file_path', 'Unknown')}", self.styles['Normal']))
+                    analysis_content.append(Paragraph(f"Page: {result.get('page_number', 'Unknown')}", self.styles['Normal']))
+                    
+                    # Dataset match information
+                    dataset_match = result.get('dataset_match')
+                    if dataset_match:
+                        analysis_content.append(Paragraph(f"Dataset Path: {dataset_match.get('full_path', 'Unknown')}", self.styles['Normal']))
+                        analysis_content.append(Paragraph(f"File Size: {dataset_match.get('size', 'Unknown')} bytes", self.styles['Normal']))
+                    
+                    analysis_content.append(Spacer(1, 10))
+                    
+                    # Image comparison results
+                    image_comparison = result.get('image_comparison')
+                    if image_comparison:
+                        analysis_content.append(Paragraph("<b>Image Comparison:</b>", self.styles['Normal']))
+                        
+                        # Dimensions comparison
+                        if image_comparison.get('dimensions_match'):
+                            analysis_content.append(Paragraph("✅ Dimensions: Match exactly", self.comparison_style))
+                        else:
+                            pdf_dims = image_comparison.get('pdf_dimensions', 'Unknown')
+                            orig_dims = image_comparison.get('original_dimensions', 'Unknown')
+                            analysis_content.append(Paragraph(f"⚠️ Dimensions: PDF {pdf_dims} vs Original {orig_dims}", self.comparison_style))
+                        
+                        # Visual similarity
+                        similarity = image_comparison.get('visual_similarity', 'unknown')
+                        similarity_score = image_comparison.get('similarity_score', 0)
+                        if similarity == 'very_high':
+                            analysis_content.append(Paragraph(f"✅ Visual Similarity: Very High ({similarity_score}%)", self.comparison_style))
+                        elif similarity == 'high':
+                            analysis_content.append(Paragraph(f"✅ Visual Similarity: High ({similarity_score}%)", self.comparison_style))
+                        elif similarity == 'medium':
+                            analysis_content.append(Paragraph(f"⚠️ Visual Similarity: Medium ({similarity_score}%)", self.comparison_style))
+                        else:
+                            analysis_content.append(Paragraph(f"❌ Visual Similarity: Low ({similarity_score}%)", self.comparison_style))
+                    
+                    analysis_content.append(Spacer(1, 10))
+                    
+                    # Original tags
+                    analysis_content.append(Paragraph("<b>Original AI-Generated Tags:</b>", self.styles['Normal']))
+                    original_tags = result.get('original_tags', [])
+                    if original_tags:
+                        tags_text = ", ".join(original_tags[:15])  # Limit display
+                        if len(original_tags) > 15:
+                            tags_text += f" ... and {len(original_tags) - 15} more"
+                        analysis_content.append(Paragraph(tags_text, self.tag_style))
+                    else:
+                        analysis_content.append(Paragraph("No tags found", self.styles['Normal']))
+                    
+                    analysis_content.append(Spacer(1, 10))
+                    
+                    # Kosmos-2 general description
+                    kosmos_explanations = result.get('kosmos_explanations', {})
+                    general_desc = kosmos_explanations.get('general_description', '')
+                    if general_desc:
+                        analysis_content.append(Paragraph("<b>Kosmos-2 Visual Understanding:</b>", self.styles['Normal']))
+                        analysis_content.append(Paragraph(general_desc, self.explanation_style))
+                    
+                    # Create the main table with images and analysis
+                    content_data = [[images_content, analysis_content]]
+                    
+                    main_table = Table(content_data, colWidths=[3.5*inch, 3.5*inch])
+                    main_table.setStyle(TableStyle([
+                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                        ('LEFTPADDING', (0, 0), (-1, -1), 10),
+                        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+                        ('TOPPADDING', (0, 0), (-1, -1), 10),
+                        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.lightgrey)
+                    ]))
+                    
+                    story.append(main_table)
+                    story.append(Spacer(1, 15))
+                    
+                    # Tag-specific explanations
+                    tag_explanations = kosmos_explanations.get('tag_explanations', {})
+                    if tag_explanations:
+                        story.append(Paragraph("Tag-Specific Explanations:", self.subsection_style))
+                        
+                        for tag, explanation in list(tag_explanations.items())[:8]:  # Limit to 8 tags
+                            story.append(Paragraph(f"<b>'{tag}':</b> {explanation}", 
+                                                 self.explanation_style))
+                        
+                        if len(tag_explanations) > 8:
+                            remaining = len(tag_explanations) - 8
+                            story.append(Paragraph(f"<i>... and {remaining} more tag explanations</i>", 
+                                                 self.styles['Normal']))
+                    
+                    # Confidence assessment
+                    confidence = kosmos_explanations.get('confidence_assessment', '')
+                    if confidence:
+                        story.append(Spacer(1, 10))
+                        story.append(Paragraph("Confidence Assessment:", self.subsection_style))
+                        story.append(Paragraph(confidence, self.explanation_style))
+                    
+                    # Original model outputs for comparison
+                    story.append(Spacer(1, 15))
+                    story.append(Paragraph("Original Model Outputs (for comparison):", self.subsection_style))
+                    
+                    if result.get('blip_caption'):
+                        story.append(Paragraph(f"<b>BLIP Caption:</b> {result['blip_caption']}", 
+                                             self.styles['Normal']))
+                    
+                    if result.get('llava_description'):
+                        llava_desc = result['llava_description']
+                        if len(llava_desc) > 200:
+                            llava_desc = llava_desc[:200] + "..."
+                        story.append(Paragraph(f"<b>LLaVA Description:</b> {llava_desc}", 
+                                             self.styles['Normal']))
+                    
+                    story.append(PageBreak())
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error processing analysis {i}: {e}")
+                    story.append(Paragraph(f"Error processing analysis {i}: {result.get('file_name', 'Unknown')}", 
+                                         self.styles['Normal']))
+                    story.append(Spacer(1, 20))
+            
+            # Enhanced insights and conclusions
+            story.append(Paragraph("Key Insights & Dataset Validation", self.section_style))
+            insights = self._generate_enhanced_insights(analysis_results)
+            for insight in insights:
+                story.append(Paragraph(f"• {insight}", self.styles['Normal']))
+                story.append(Spacer(1, 5))
+            
+            # Build the PDF
+            doc.build(story)
+            logger.info(f"✅ Enhanced explainable AI report generated: {output_path}")
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create enhanced explainable report: {e}")
+            return ""
+    
+    def _generate_enhanced_statistics(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate enhanced summary statistics with dataset comparison"""
+        if not results:
+            return {'total_images': 0, 'total_tags': 0, 'avg_tags': 0, 'most_common_tag': 'None', 
+                   'matched_images': 0, 'match_percentage': 0, 'dataset_enabled': False}
+        
+        total_images = len(results)
+        all_tags = []
+        matched_count = 0
+        
+        # Check if dataset integration is enabled
+        dataset_enabled = any(result.get('dataset_match') is not None for result in results)
+        
+        for result in results:
+            all_tags.extend(result.get('original_tags', []))
+            if result.get('match_status') == 'matched':
+                matched_count += 1
+        
+        total_tags = len(all_tags)
+        avg_tags = round(total_tags / total_images, 1) if total_images > 0 else 0
+        match_percentage = round((matched_count / total_images) * 100, 1) if total_images > 0 else 0
+        
+        # Find most common tag
+        tag_counts = {}
+        for tag in all_tags:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        
+        most_common_tag = max(tag_counts, key=tag_counts.get) if tag_counts else 'None'
+        
+        stats = {
+            'total_images': total_images,
+            'total_tags': total_tags,
+            'avg_tags': avg_tags,
+            'most_common_tag': most_common_tag,
+            'matched_images': matched_count,
+            'match_percentage': match_percentage,
+            'dataset_enabled': dataset_enabled
+        }
+        
+        # Add dataset comparison if available and results have it
+        if results and 'image_comparison' in results[0]:
+            # Get comparison summary from analyzer if available
+            if hasattr(explainable_analyzer, 'comparison_results'):
+                stats['dataset_comparison'] = explainable_analyzer.comparison_results
+        
+        return stats
+    
+    def _generate_enhanced_insights(self, results: List[Dict[str, Any]]) -> List[str]:
+        """Generate enhanced insights including dataset validation"""
+        insights = []
+        
+        if not results:
+            insights.append("No analysis results available for insight generation.")
+            return insights
+        
+        # Dataset matching insights
+        matched_count = sum(1 for result in results if result.get('match_status') == 'matched')
+        total_count = len(results)
+        match_rate = (matched_count / total_count) * 100 if total_count > 0 else 0
+        
+        if match_rate > 90:
+            insights.append(f"Excellent dataset validation: {match_rate:.1f}% of images successfully matched with original dataset")
+        elif match_rate > 70:
+            insights.append(f"Good dataset validation: {match_rate:.1f}% of images matched - some images may be missing from dataset")
+        elif match_rate > 50:
+            insights.append(f"Moderate dataset validation: {match_rate:.1f}% match rate - check dataset completeness")
+        else:
+            insights.append(f"Low dataset validation: Only {match_rate:.1f}% match rate - dataset may be incomplete or have naming issues")
+        
+        # Image quality insights
+        high_similarity_count = 0
+        for result in results:
+            comparison = result.get('image_comparison', {})
+            similarity = comparison.get('visual_similarity', 'unknown')
+            if similarity in ['very_high', 'high']:
+                high_similarity_count += 1
+        
+        if high_similarity_count > 0:
+            similarity_rate = (high_similarity_count / matched_count) * 100 if matched_count > 0 else 0
+            insights.append(f"Image quality preservation: {similarity_rate:.1f}% of matched images maintain high visual similarity")
+        
+        # Tag frequency analysis
+        all_tags = []
+        for result in results:
+            all_tags.extend(result.get('original_tags', []))
+        
+        if all_tags:
+            tag_counts = {}
+            for tag in all_tags:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            
+            most_common = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            insights.append(f"Most frequently identified elements: {', '.join([f'{tag}({count})' for tag, count in most_common])}")
+        
+        # Explanation quality analysis
+        explanations_with_content = 0
+        for result in results:
+            kosmos_explanations = result.get('kosmos_explanations', {})
+            if kosmos_explanations.get('general_description') and len(kosmos_explanations.get('general_description', '')) > 20:
+                explanations_with_content += 1
+        
+        if explanations_with_content > 0:
+            insights.append(f"Kosmos-2 provided detailed explanations for {explanations_with_content}/{len(results)} images ({round(100*explanations_with_content/len(results), 1)}%)")
+        
+        # Tag explanation coverage
+        total_tag_explanations = 0
+        total_tags = 0
+        for result in results:
+            tags = result.get('original_tags', [])
+            tag_explanations = result.get('kosmos_explanations', {}).get('tag_explanations', {})
+            total_tags += len(tags)
+            total_tag_explanations += len(tag_explanations)
+        
+        if total_tags > 0:
+            coverage = round(100 * total_tag_explanations / total_tags, 1)
+            insights.append(f"Tag explanation coverage: {coverage}% ({total_tag_explanations}/{total_tags} tags explained)")
+        
+        insights.append("Kosmos-2 provides grounded visual reasoning with dataset validation, ensuring both explanation quality and data integrity.")
+        insights.append("This enhanced approach combines explainable AI with dataset verification for maximum transparency and reliability.")
+        
+        return insights
+
+# Initialize enhanced report generator
+report_generator = ExplainableAIReportGenerator()
+print("✅ Enhanced Explainable AI Report Generator with Dataset Integration initialized!")
 
 """
 Cell 5: Explainable AI Report Generator
@@ -1023,13 +1776,13 @@ report_generator = ExplainableAIReportGenerator()
 print("✅ Explainable AI Report Generator initialized successfully!")
 
 """
-Cell 6: Main Interface and Terminal Integration
-Command-line interface for explainable AI analysis
+Cell 6: Enhanced Main Interface with Dataset Integration
+Command-line interface for explainable AI analysis with compulsory dataset input
 """
 
 class ExplainableAICommandInterface:
     """
-    Command-line interface for the explainable AI system
+    Enhanced command-line interface for the explainable AI system with dataset integration
     """
     
     def __init__(self):
@@ -1037,17 +1790,21 @@ class ExplainableAICommandInterface:
         self.report_generator = report_generator
         self.pdf_scanner = pdf_scanner
     
-    def run_analysis(self, pdf_path: str, output_dir: str = None) -> Dict[str, str]:
+    def run_enhanced_analysis(self, pdf_path: str, dataset_path: str, output_dir: str = None) -> Dict[str, str]:
         """
-        Run complete explainable AI analysis on a PDF report
+        Run complete explainable AI analysis with dataset integration (COMPULSORY)
         """
         try:
-            logger.info(f"🚀 Starting explainable AI analysis...")
+            logger.info(f"🚀 Starting enhanced explainable AI analysis with dataset integration...")
             logger.info(f"📄 PDF Path: {pdf_path}")
+            logger.info(f"📁 Dataset Path: {dataset_path}")
             
-            # Validate input
+            # Validate inputs
             if not os.path.exists(pdf_path):
                 raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+            
+            if not os.path.exists(dataset_path):
+                raise FileNotFoundError(f"Dataset directory not found: {dataset_path}")
             
             # Set output directory
             if output_dir is None:
@@ -1056,56 +1813,127 @@ class ExplainableAICommandInterface:
                 output_dir = Path(output_dir)
                 output_dir.mkdir(parents=True, exist_ok=True)
             
-            # 1. Analyze PDF report
-            logger.info("📊 Step 1: Analyzing PDF report with Kosmos-2...")
-            analysis_results = self.analyzer.analyze_pdf_report(pdf_path)
+            # 1. Analyze PDF report with dataset integration
+            logger.info("📊 Step 1: Analyzing PDF report with dataset integration using Kosmos-2...")
+            analysis_results = self.analyzer.analyze_pdf_report_with_dataset(pdf_path, dataset_path)
             
             if not analysis_results:
-                raise ValueError("No analysis results generated. Please check the PDF format and content.")
+                raise ValueError("No analysis results generated. Please check the PDF format, content, and dataset.")
             
-            # 2. Generate JSON results
-            logger.info("💾 Step 2: Saving analysis results to JSON...")
+            # 2. Get comparison summary
+            comparison_summary = self.analyzer.get_comparison_summary()
+            unmatched_images = self.analyzer.get_unmatched_images()
+            
+            # 3. Generate JSON results with dataset info
+            logger.info("💾 Step 2: Saving enhanced analysis results to JSON...")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            json_path = output_dir / f"explainable_analysis_results_{timestamp}.json"
+            json_path = output_dir / f"enhanced_explainable_analysis_{timestamp}.json"
             saved_json = self.analyzer.save_results_to_json(str(json_path))
             
-            # 3. Generate explainable AI report
-            logger.info("📋 Step 3: Generating explainable AI PDF report...")
-            report_path = output_dir / f"explainable_ai_report_{timestamp}.pdf"
+            # 4. Generate enhanced explainable AI report with images
+            logger.info("📋 Step 3: Generating enhanced explainable AI PDF report with dataset comparison...")
+            report_path = output_dir / f"enhanced_explainable_ai_report_{timestamp}.pdf"
             saved_report = self.report_generator.create_explainable_report(
                 analysis_results, str(report_path)
             )
             
-            # 4. Generate summary
+            # 5. Generate comparison report
+            comparison_report_path = output_dir / f"dataset_comparison_summary_{timestamp}.txt"
+            self._generate_comparison_summary_file(comparison_summary, unmatched_images, str(comparison_report_path))
+            
+            # 6. Generate summary
             stats = self.analyzer.generate_summary_statistics()
             
             results = {
                 "status": "success",
                 "pdf_analyzed": pdf_path,
+                "dataset_used": dataset_path,
                 "images_processed": len(analysis_results),
+                "images_matched": comparison_summary.get('matched_images', 0),
+                "match_percentage": comparison_summary.get('match_percentage', 0),
                 "json_output": saved_json,
                 "report_output": saved_report,
+                "comparison_summary": str(comparison_report_path),
                 "analysis_timestamp": timestamp,
                 "statistics": stats
             }
             
-            logger.info("🎉 Analysis complete!")
+            logger.info("🎉 Enhanced analysis complete!")
+            logger.info(f"📊 Dataset Matching: {comparison_summary.get('matched_images', 0)}/{comparison_summary.get('total_pdf_images', 0)} images matched ({comparison_summary.get('match_percentage', 0)}%)")
+            
             return results
             
         except Exception as e:
-            logger.error(f"❌ Analysis failed: {e}")
+            logger.error(f"❌ Enhanced analysis failed: {e}")
             return {
                 "status": "error",
                 "error_message": str(e),
-                "pdf_analyzed": pdf_path
+                "pdf_analyzed": pdf_path,
+                "dataset_used": dataset_path if 'dataset_path' in locals() else 'Unknown'
             }
     
-    def find_and_analyze_reports(self, directory: str) -> List[Dict[str, str]]:
+    def _generate_comparison_summary_file(self, comparison_summary: Dict, unmatched_images: List[str], output_path: str):
         """
-        Find all PDF reports in a directory and analyze them
+        Generate a detailed comparison summary text file
+        """
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write("DATASET COMPARISON SUMMARY REPORT\n")
+                f.write("=" * 50 + "\n\n")
+                
+                f.write(f"Analysis Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                
+                f.write("OVERVIEW:\n")
+                f.write(f"• Total PDF Images: {comparison_summary.get('total_pdf_images', 0)}\n")
+                f.write(f"• Total Dataset Images: {comparison_summary.get('total_dataset_images', 0)}\n")
+                f.write(f"• Successfully Matched: {comparison_summary.get('matched_images', 0)}\n")
+                f.write(f"• Unmatched Images: {comparison_summary.get('unmatched_images', 0)}\n")
+                f.write(f"• Match Success Rate: {comparison_summary.get('match_percentage', 0)}%\n\n")
+                
+                if unmatched_images:
+                    f.write("UNMATCHED IMAGES:\n")
+                    f.write("-" * 20 + "\n")
+                    for i, img_name in enumerate(unmatched_images, 1):
+                        f.write(f"{i}. {img_name}\n")
+                    f.write(f"\nTotal Unmatched: {len(unmatched_images)}\n\n")
+                else:
+                    f.write("✅ ALL IMAGES SUCCESSFULLY MATCHED!\n\n")
+                
+                f.write("RECOMMENDATIONS:\n")
+                f.write("-" * 15 + "\n")
+                match_rate = comparison_summary.get('match_percentage', 0)
+                
+                if match_rate == 100:
+                    f.write("• Perfect match rate achieved!\n")
+                    f.write("• Dataset is complete and well-organized\n")
+                elif match_rate >= 90:
+                    f.write("• Excellent match rate\n")
+                    f.write("• Minor gaps in dataset or naming inconsistencies\n")
+                elif match_rate >= 70:
+                    f.write("• Good match rate with room for improvement\n")
+                    f.write("• Check for missing images in dataset\n")
+                    f.write("• Verify filename consistency\n")
+                elif match_rate >= 50:
+                    f.write("• Moderate match rate - action needed\n")
+                    f.write("• Significant dataset gaps detected\n")
+                    f.write("• Review dataset completeness and organization\n")
+                else:
+                    f.write("• Low match rate - immediate attention required\n")
+                    f.write("• Dataset may be incomplete or incorrectly structured\n")
+                    f.write("• Check file paths and naming conventions\n")
+                
+            logger.info(f"📋 Comparison summary saved to: {output_path}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to generate comparison summary: {e}")
+    
+    def find_and_analyze_reports_with_dataset(self, directory: str, dataset_path: str) -> List[Dict[str, str]]:
+        """
+        Find all PDF reports in a directory and analyze them with dataset integration
         """
         try:
             logger.info(f"🔍 Searching for PDF reports in: {directory}")
+            logger.info(f"📁 Using dataset: {dataset_path}")
             
             pdf_files = self.pdf_scanner.find_pdf_reports(directory)
             
@@ -1119,7 +1947,7 @@ class ExplainableAICommandInterface:
             for i, pdf_path in enumerate(pdf_files, 1):
                 logger.info(f"📊 Processing PDF {i}/{len(pdf_files)}: {Path(pdf_path).name}")
                 
-                result = self.run_analysis(pdf_path, directory)
+                result = self.run_enhanced_analysis(pdf_path, dataset_path, directory)
                 result["pdf_index"] = i
                 result["total_pdfs"] = len(pdf_files)
                 results.append(result)
@@ -1127,99 +1955,234 @@ class ExplainableAICommandInterface:
             return results
             
         except Exception as e:
-            logger.error(f"❌ Failed to find and analyze reports: {e}")
+            logger.error(f"❌ Failed to find and analyze reports with dataset: {e}")
             return []
     
     def interactive_mode(self):
         """
-        Interactive command-line mode
+        Enhanced interactive command-line mode with separate dataset input
         """
-        print("\n" + "="*70)
-        print("🔬 EXPLAINABLE AI IMAGE TAGGING ANALYZER")
-        print("   Powered by Kosmos-2 Vision-Language Model")
-        print("="*70)
+        print("\n" + "="*80)
+        print("🔬 ENHANCED EXPLAINABLE AI IMAGE TAGGING ANALYZER")
+        print("   Powered by Kosmos-2 Vision-Language Model with Dataset Integration")
+        print("   📁 Dataset input is COMPULSORY for all analysis")
+        print("="*80)
         
         while True:
             try:
                 print("\n📋 Available Commands:")
-                print("  1. analyze <pdf_path>        - Analyze single PDF report")
-                print("  2. scan <directory>          - Find and analyze all PDFs in directory")
-                print("  3. status                    - Show system status")
-                print("  4. help                      - Show this help")
-                print("  5. quit                      - Exit program")
+                print("  1. analyze                               - Analyze single PDF with dataset")
+                print("  2. scan                                  - Analyze all PDFs in directory with dataset")
+                print("  3. validate                              - Validate dataset structure")
+                print("  4. status                                - Show system status")
+                print("  5. help                                  - Show detailed help")
+                print("  6. quit                                  - Exit program")
                 
-                command = input("\n🔬 explainable-ai> ").strip().split(maxsplit=1)
+                command = input("\n🔬 enhanced-ai> ").strip().lower()
                 
                 if not command:
                     continue
                 
-                cmd = command[0].lower()
-                
-                if cmd in ['quit', 'exit', 'q']:
+                if command in ['quit', 'exit', 'q']:
                     print("👋 Goodbye!")
                     break
                 
-                elif cmd == 'analyze' and len(command) > 1:
-                    pdf_path = command[1].strip('"\'')
+                elif command == 'analyze':
+                    # Get PDF path
+                    pdf_path = input("📄 Enter PDF report path: ").strip().strip('"\'')
+                    if not pdf_path:
+                        print("❌ PDF path cannot be empty!")
+                        continue
+                    
+                    # Get dataset path separately
+                    dataset_path = input("📁 Enter dataset directory path: ").strip().strip('"\'')
+                    if not dataset_path:
+                        print("❌ Dataset path cannot be empty!")
+                        continue
+                    
                     print(f"\n🔬 Analyzing PDF: {pdf_path}")
+                    print(f"📁 Using Dataset: {dataset_path}")
                     
-                    result = self.run_analysis(pdf_path)
-                    self._print_analysis_result(result)
+                    result = self.run_enhanced_analysis(pdf_path, dataset_path)
+                    self._print_enhanced_analysis_result(result)
                 
-                elif cmd == 'scan' and len(command) > 1:
-                    directory = command[1].strip('"\'')
+                elif command == 'scan':
+                    # Get directory path
+                    directory = input("📂 Enter directory containing PDF reports: ").strip().strip('"\'')
+                    if not directory:
+                        print("❌ Directory path cannot be empty!")
+                        continue
+                    
+                    # Get dataset path separately
+                    dataset_path = input("📁 Enter dataset directory path: ").strip().strip('"\'')
+                    if not dataset_path:
+                        print("❌ Dataset path cannot be empty!")
+                        continue
+                    
                     print(f"\n🔍 Scanning directory: {directory}")
+                    print(f"📁 Using Dataset: {dataset_path}")
                     
-                    results = self.find_and_analyze_reports(directory)
-                    self._print_batch_results(results)
+                    results = self.find_and_analyze_reports_with_dataset(directory, dataset_path)
+                    self._print_enhanced_batch_results(results)
                 
-                elif cmd == 'status':
-                    self._print_system_status()
+                elif command == 'validate':
+                    # Get dataset path for validation
+                    dataset_path = input("📁 Enter dataset directory path to validate: ").strip().strip('"\'')
+                    if not dataset_path:
+                        print("❌ Dataset path cannot be empty!")
+                        continue
+                    
+                    self._validate_dataset(dataset_path)
                 
-                elif cmd == 'help':
-                    self._print_detailed_help()
+                elif command == 'status':
+                    self._print_enhanced_system_status()
+                
+                elif command == 'help':
+                    self._print_enhanced_detailed_help()
                 
                 else:
-                    print("❌ Invalid command. Type 'help' for available commands.")
+                    print("❌ Invalid command.")
+                    print("💡 Available commands: analyze, scan, validate, status, help, quit")
                     
             except KeyboardInterrupt:
                 print("\n\n👋 Interrupted by user. Goodbye!")
                 break
             except Exception as e:
                 print(f"❌ Error: {e}")
+                logger.error(f"Interactive mode error: {e}")
     
-    def _print_analysis_result(self, result: Dict[str, str]):
-        """Print analysis result in a formatted way"""
-        print("\n" + "="*50)
+    def _validate_dataset(self, dataset_path: str):
+        """
+        Enhanced dataset validation with detailed feedback
+        """
+        try:
+            print(f"\n🔍 Validating dataset: {dataset_path}")
+            
+            # Check if path exists
+            if not os.path.exists(dataset_path):
+                print(f"❌ Dataset directory not found: {dataset_path}")
+                print("💡 Please check the path and try again")
+                return
+            
+            # Check if it's a directory
+            if not os.path.isdir(dataset_path):
+                print(f"❌ Path is not a directory: {dataset_path}")
+                return
+            
+            print("📁 Directory found, scanning for images...")
+            
+            # Load dataset using analyzer
+            success = self.analyzer.load_dataset(dataset_path)
+            
+            if success:
+                dataset_info = self.analyzer.dataset_images
+                print(f"✅ Dataset validation successful!")
+                print(f"📊 Found {len(dataset_info)} images in dataset")
+                
+                if len(dataset_info) == 0:
+                    print("⚠️ No supported image files found in dataset")
+                    print("💡 Supported formats: JPG, JPEG, PNG, BMP, TIFF, TIF, WebP")
+                    return
+                
+                # Show format breakdown
+                formats = {}
+                total_size = 0
+                for img_info in dataset_info.values():
+                    ext = img_info['extension']
+                    formats[ext] = formats.get(ext, 0) + 1
+                    total_size += img_info.get('size', 0)
+                
+                print(f"📂 File formats: {dict(formats)}")
+                print(f"💾 Total dataset size: {total_size / (1024*1024):.1f} MB")
+                
+                # Show sample filenames
+                sample_files = list(dataset_info.keys())[:5]
+                print(f"📄 Sample files: {sample_files}")
+                
+                if len(dataset_info) > 5:
+                    print(f"   ... and {len(dataset_info) - 5} more files")
+                
+                print(f"✅ Dataset is ready for analysis!")
+                
+            else:
+                print(f"❌ Dataset validation failed!")
+                print("💡 Check if the directory contains supported image files")
+                
+        except Exception as e:
+            print(f"❌ Dataset validation error: {e}")
+            logger.error(f"Dataset validation error: {e}")
+    
+    def _print_enhanced_analysis_result(self, result: Dict[str, str]):
+        """Print enhanced analysis result with detailed dataset information"""
+        print("\n" + "="*70)
         
         if result["status"] == "success":
-            print("✅ ANALYSIS SUCCESSFUL")
+            print("✅ ENHANCED ANALYSIS SUCCESSFUL")
             print(f"📄 PDF Analyzed: {result['pdf_analyzed']}")
+            print(f"📁 Dataset Used: {result['dataset_used']}")
             print(f"🖼️  Images Processed: {result['images_processed']}")
-            print(f"💾 JSON Results: {result['json_output']}")
-            print(f"📋 Report Generated: {result['report_output']}")
+            print(f"🔗 Images Matched: {result['images_matched']}/{result['images_processed']} ({result['match_percentage']}%)")
+            
+            # Enhanced matching feedback
+            match_rate = result['match_percentage']
+            if match_rate == 100:
+                print("🎉 Perfect dataset matching achieved!")
+            elif match_rate >= 90:
+                print("✅ Excellent dataset matching rate")
+            elif match_rate >= 70:
+                print("⚠️ Good matching rate - minor gaps detected")
+            elif match_rate >= 50:
+                print("⚠️ Moderate matching rate - check dataset completeness")
+            else:
+                print("❌ Low matching rate - dataset may be incomplete")
+            
+            print(f"\n📋 Generated Files:")
+            print(f"   💾 JSON Results: {result['json_output']}")
+            print(f"   📊 Enhanced Report: {result['report_output']}")
+            print(f"   📈 Comparison Summary: {result['comparison_summary']}")
             
             if "statistics" in result:
                 stats = result["statistics"]
-                print(f"📊 Statistics:")
+                print(f"\n📊 Enhanced Statistics:")
                 print(f"   • Total Tags Explained: {stats.get('total_tags_explained', 'N/A')}")
                 print(f"   • Average Tags per Image: {stats.get('average_tags_per_image', 'N/A')}")
                 
                 if stats.get('most_common_tags'):
                     most_common = list(stats['most_common_tags'].items())[:3]
-                    print(f"   • Most Common Tags: {', '.join([f'{tag}({count})' for tag, count in most_common])}")
+                    tags_str = ', '.join([f'{tag}({count})' for tag, count in most_common])
+                    print(f"   • Most Common Tags: {tags_str}")
+            
+            print(f"\n🎯 Next Steps:")
+            print(f"   1. Check the enhanced PDF report for visual comparisons")
+            print(f"   2. Review the comparison summary for dataset validation")
+            print(f"   3. Examine unmatched images if match rate < 100%")
+            
         else:
-            print("❌ ANALYSIS FAILED")
+            print("❌ ENHANCED ANALYSIS FAILED")
             print(f"📄 PDF: {result['pdf_analyzed']}")
+            print(f"📁 Dataset: {result['dataset_used']}")
             print(f"❌ Error: {result['error_message']}")
-        
-        print("="*50)
+            
+            # Provide troubleshooting tips
+            print(f"\n🛠️ Troubleshooting Tips:")
+            if "not found" in result['error_message'].lower():
+                print(f"   • Check if the file/directory paths exist")
+                print(f"   • Use absolute paths instead of relative paths")
+                print(f"   • Ensure proper file permissions")
+            elif "pdf" in result['error_message'].lower():
+                print(f"   • Verify the PDF is a valid image analysis report")
+                print(f"   • Check if PDF contains embedded images")
+            elif "dataset" in result['error_message'].lower():
+                print(f"   • Ensure dataset directory contains image files")
+                print(f"   • Check supported formats: JPG, PNG, BMP, TIFF, WebP")
+            
+        print("="*70)
     
-    def _print_batch_results(self, results: List[Dict[str, str]]):
-        """Print batch analysis results"""
-        print("\n" + "="*60)
-        print("📊 BATCH ANALYSIS RESULTS")
-        print("="*60)
+    def _print_enhanced_batch_results(self, results: List[Dict[str, str]]):
+        """Print enhanced batch analysis results with dataset information"""
+        print("\n" + "="*70)
+        print("📊 ENHANCED BATCH ANALYSIS RESULTS")
+        print("="*70)
         
         successful = [r for r in results if r["status"] == "success"]
         failed = [r for r in results if r["status"] == "error"]
@@ -1229,12 +2192,17 @@ class ExplainableAICommandInterface:
         
         if successful:
             total_images = sum(r["images_processed"] for r in successful)
+            total_matched = sum(r["images_matched"] for r in successful)
+            overall_match_rate = (total_matched / total_images) * 100 if total_images > 0 else 0
+            
             print(f"🖼️  Total Images Processed: {total_images}")
+            print(f"🔗 Total Images Matched: {total_matched} ({overall_match_rate:.1f}%)")
             
             print("\n📋 Generated Reports:")
             for result in successful:
                 pdf_name = Path(result["pdf_analyzed"]).name
-                print(f"   • {pdf_name} → {result['images_processed']} images")
+                match_info = f"{result['images_matched']}/{result['images_processed']} matched"
+                print(f"   • {pdf_name} → {result['images_processed']} images ({match_info})")
         
         if failed:
             print("\n❌ Failed Analyses:")
@@ -1242,71 +2210,102 @@ class ExplainableAICommandInterface:
                 pdf_name = Path(result["pdf_analyzed"]).name
                 print(f"   • {pdf_name}: {result['error_message']}")
         
-        print("="*60)
+        print("="*70)
     
-    def _print_system_status(self):
-        """Print system status information"""
-        print("\n" + "="*50)
-        print("🔧 SYSTEM STATUS")
-        print("="*50)
+    def _print_enhanced_system_status(self):
+        """Print enhanced system status information"""
+        print("\n" + "="*60)
+        print("🔧 ENHANCED SYSTEM STATUS")
+        print("="*60)
         print(f"🤖 Kosmos-2 Model: Loaded")
         print(f"💻 Device: {kosmos_explainer.device}")
         print(f"📄 PDF Scanner: Ready")
-        print(f"📋 Report Generator: Ready")
+        print(f"📋 Enhanced Report Generator: Ready")
+        print(f"📁 Dataset Integration: Enabled (COMPULSORY)")
+        print(f"🔗 Image Comparison: Enabled")
         print(f"🕒 Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("="*50)
+        
+        # Check if dataset is loaded
+        if hasattr(explainable_analyzer, 'dataset_path') and explainable_analyzer.dataset_path:
+            print(f"📂 Current Dataset: {explainable_analyzer.dataset_path}")
+            print(f"📊 Dataset Images: {len(explainable_analyzer.dataset_images)}")
+        else:
+            print(f"📂 Current Dataset: None loaded")
+        
+        print("="*60)
     
-    def _print_detailed_help(self):
-        """Print detailed help information"""
-        print("\n" + "="*70)
-        print("📚 DETAILED HELP")
-        print("="*70)
+    def _print_enhanced_detailed_help(self):
+        """Print enhanced detailed help information"""
+        print("\n" + "="*80)
+        print("📚 ENHANCED DETAILED HELP")
+        print("="*80)
         print("""
-🔬 EXPLAINABLE AI IMAGE TAGGING ANALYZER
+🔬 ENHANCED EXPLAINABLE AI IMAGE TAGGING ANALYZER
 
 This system analyzes PDF reports generated by the AI image tagging system
-and provides explainable AI insights using the Kosmos-2 vision-language model.
+and provides explainable AI insights using Kosmos-2 with COMPULSORY dataset integration.
 
 COMMANDS:
-  analyze <pdf_path>    - Analyze a single PDF report
-                         Example: analyze "/path/to/report.pdf"
+  analyze <pdf_path> <dataset_path>  - Analyze a single PDF report with dataset
+                                      Example: analyze "report.pdf" "/path/to/images/"
   
-  scan <directory>      - Find and analyze all PDF reports in a directory
-                         Example: scan "/path/to/reports/"
+  scan <directory> <dataset_path>    - Find and analyze all PDF reports with dataset
+                                      Example: scan "/reports/" "/path/to/images/"
   
-  status               - Show current system status and configuration
+  validate <dataset_path>           - Validate dataset structure and contents
+                                      Example: validate "/path/to/images/"
   
-  help                 - Show this detailed help information
+  status                           - Show current system status and configuration
   
-  quit                 - Exit the program
+  help                            - Show this detailed help information
+  
+  quit                            - Exit the program
+
+ENHANCED FEATURES:
+• COMPULSORY dataset integration for validation
+• Side-by-side comparison of PDF vs original images
+• Image quality and similarity analysis
+• Dataset matching statistics and reporting
+• Enhanced PDF reports with both image versions
+• Detailed comparison summary files
 
 WHAT IT DOES:
 • Scans PDF reports generated by the image tagging system
-• Extracts images and their AI-generated tags
+• REQUIRES original dataset path for image validation
+• Matches PDF images with original dataset images
 • Uses Kosmos-2 to explain WHY each tag was assigned
-• Generates detailed explainable AI reports
-• Saves results in both JSON and PDF formats
+• Compares image quality between PDF and original versions
+• Generates enhanced explainable AI reports with both images
+• Creates dataset validation and comparison summaries
 
 OUTPUT FILES:
-• explainable_analysis_results_TIMESTAMP.json - Raw analysis data
-• explainable_ai_report_TIMESTAMP.pdf - Formatted report with explanations
+• enhanced_explainable_analysis_TIMESTAMP.json - Complete analysis data
+• enhanced_explainable_ai_report_TIMESTAMP.pdf - Visual report with comparisons
+• dataset_comparison_summary_TIMESTAMP.txt - Matching validation summary
 
 REQUIREMENTS:
-• PDF reports must be generated by the AI image tagging system
+• PDF reports from the AI image tagging system
+• Original dataset directory (COMPULSORY)
 • Sufficient memory for Kosmos-2 model (4GB+ recommended)
 • Internet connection for initial model download
+
+DATASET REQUIREMENTS:
+• Must contain original images used to generate the PDF report
+• Supported formats: JPG, PNG, BMP, TIFF, WebP
+• Filenames should match or be similar to those in PDF report
+• Recommended: Organized directory structure
         """)
-        print("="*70)
+        print("="*80)
 
 def main():
-    """Main function for command-line usage"""
+    """Enhanced main function for command-line usage with dataset requirement"""
     parser = argparse.ArgumentParser(
-        description="Explainable AI Analysis for Image Tagging Reports",
+        description="Enhanced Explainable AI Analysis for Image Tagging Reports with Dataset Integration",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python explainable_ai.py --analyze report.pdf
-  python explainable_ai.py --scan /path/to/reports/
+  python explainable_ai.py --analyze report.pdf --dataset /path/to/images/
+  python explainable_ai.py --scan /path/to/reports/ --dataset /path/to/images/
   python explainable_ai.py --interactive
         """
     )
@@ -1315,6 +2314,8 @@ Examples:
                        help="Analyze a single PDF report")
     parser.add_argument("--scan", type=str, 
                        help="Scan directory for PDF reports and analyze all")
+    parser.add_argument("--dataset", type=str, required=False,
+                       help="Dataset directory path (COMPULSORY for analysis)")
     parser.add_argument("--output", type=str, 
                        help="Output directory for results")
     parser.add_argument("--interactive", action="store_true", 
@@ -1322,25 +2323,36 @@ Examples:
     
     args = parser.parse_args()
     
-    # Initialize the interface
+    # Initialize the enhanced interface
     interface = ExplainableAICommandInterface()
     
     try:
         if args.analyze:
-            print("🔬 Starting single PDF analysis...")
-            result = interface.run_analysis(args.analyze, args.output)
-            interface._print_analysis_result(result)
+            if not args.dataset:
+                print("❌ Error: --dataset parameter is COMPULSORY for analysis!")
+                print("💡 Example: python explainable_ai.py --analyze report.pdf --dataset /path/to/images/")
+                sys.exit(1)
+            
+            print("🔬 Starting enhanced single PDF analysis...")
+            result = interface.run_enhanced_analysis(args.analyze, args.dataset, args.output)
+            interface._print_enhanced_analysis_result(result)
             
         elif args.scan:
-            print("🔍 Starting batch PDF analysis...")
-            results = interface.find_and_analyze_reports(args.scan)
-            interface._print_batch_results(results)
+            if not args.dataset:
+                print("❌ Error: --dataset parameter is COMPULSORY for batch analysis!")
+                print("💡 Example: python explainable_ai.py --scan /reports/ --dataset /path/to/images/")
+                sys.exit(1)
+            
+            print("🔍 Starting enhanced batch PDF analysis...")
+            results = interface.find_and_analyze_reports_with_dataset(args.scan, args.dataset)
+            interface._print_enhanced_batch_results(results)
             
         elif args.interactive:
             interface.interactive_mode()
             
         else:
-            print("🔬 Explainable AI Image Tagging Analyzer")
+            print("🔬 Enhanced Explainable AI Image Tagging Analyzer")
+            print("📁 Dataset integration is COMPULSORY for all analysis")
             print("Use --help for usage information or --interactive for interactive mode")
             interface.interactive_mode()
             
@@ -1349,17 +2361,19 @@ Examples:
         print(f"❌ Fatal error: {e}")
         sys.exit(1)
 
-# Initialize the command interface
+# Initialize the enhanced command interface
 command_interface = ExplainableAICommandInterface()
-print("✅ Command Interface initialized successfully!")
-print("\n🎉 All systems ready! You can now:")
-print("   • Run main() for command-line interface")
-print("   • Use command_interface.run_analysis(pdf_path) directly")
-print("   • Call command_interface.interactive_mode() for interactive use")
+print("✅ Enhanced Command Interface with Dataset Integration initialized!")
+print("\n🎉 All enhanced systems ready! You can now:")
+print("   • Run main() for enhanced command-line interface")
+print("   • Use command_interface.run_enhanced_analysis(pdf_path, dataset_path)")
+print("   • Call command_interface.interactive_mode() for enhanced interactive use")
+print("   • 📁 REMEMBER: Dataset path is COMPULSORY for all analysis!")
 
 if __name__ == "__main__":
     main()
-    """
+
+"""
 Cell 7: Usage Examples and Testing
 Examples of how to use the explainable AI system
 """
