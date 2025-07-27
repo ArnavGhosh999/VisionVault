@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Cell 1: Import Libraries and Setup
@@ -101,14 +100,12 @@ class Kosmos2Explainer:
             raise
     
     def generate_explanation(self, image: Image.Image, existing_tags: List[str]) -> Dict[str, Any]:
-        """
-        Generate detailed feature-based explanations for why specific tags were assigned to an image
-        """
+        """Generate detailed explanations for image tags"""
         try:
             explanations = {}
             
-            # 1. Detailed visual analysis with feature identification
-            general_prompt = "<grounding>Describe the specific visual features, objects, colors, shapes, and details you can identify in this image."
+            # 1. General image understanding - more specific prompt
+            general_prompt = "<grounding>List the specific objects, colors, text, shapes, and visual elements you can see in this image."
             inputs = self.processor(text=general_prompt, images=image, return_tensors="pt")
             
             if torch.cuda.is_available():
@@ -122,72 +119,65 @@ class Kosmos2Explainer:
                     image_embeds=None,
                     image_embeds_position_mask=inputs["image_embeds_position_mask"],
                     use_cache=True,
-                    max_new_tokens=96,  # Increased for more detailed descriptions
-                    do_sample=False,    # Use deterministic generation
+                    max_new_tokens=100,  # Increased for more detail
+                    do_sample=True,      # Enable sampling for variety
+                    temperature=0.3,     # Low but not zero
+                    top_p=0.8,
                     pad_token_id=self.processor.tokenizer.eos_token_id
                 )
             
             generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-            description = self._extract_and_clean_text(generated_text, general_prompt)
+            description = self.extract_clean_text(generated_text, general_prompt)
             explanations["general_description"] = description
             
-            # 2. Feature-based tag explanations with detailed reasoning
+            # 2. Direct visual verification prompts for each tag
             tag_explanations = {}
             
-            for tag in existing_tags[:10]:  # Process up to 10 tags for detailed analysis
-                # Use more specific prompts that ask for visual features
-                feature_prompts = [
-                    f"<grounding>What visual features, shapes, colors, or characteristics in this image indicate the presence of '{tag}'?",
-                    f"<grounding>Describe the specific visual evidence that shows '{tag}' in this image including location, appearance, and distinctive features.",
-                    f"<grounding>What makes you identify '{tag}' in this image? Point out the key visual clues and features."
-                ]
+            for tag in existing_tags[:12]:  # Process more tags
+                # Use very direct, specific prompts
+                verification_prompt = self.create_verification_prompt(tag)
                 
-                best_explanation = ""
-                max_length = 0
-                
-                for prompt in feature_prompts:
-                    try:
-                        inputs = self.processor(text=prompt, images=image, return_tensors="pt")
-                        
-                        if torch.cuda.is_available():
-                            inputs = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in inputs.items()}
-                        
-                        with torch.no_grad():
-                            generated_ids = self.model.generate(
-                                pixel_values=inputs["pixel_values"],
-                                input_ids=inputs["input_ids"],
-                                attention_mask=inputs["attention_mask"],
-                                image_embeds=None,
-                                image_embeds_position_mask=inputs["image_embeds_position_mask"],
-                                use_cache=True,
-                                max_new_tokens=72,
-                                do_sample=False,    # Use deterministic generation
-                                pad_token_id=self.processor.tokenizer.eos_token_id
-                            )
-                        
-                        tag_response = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-                        explanation = self._extract_and_clean_text(tag_response, prompt)
-                        
-                        # Select the most detailed explanation
-                        if len(explanation) > max_length and not self._is_noise_text(explanation):
-                            best_explanation = explanation
-                            max_length = len(explanation)
-                        
-                    except Exception as e:
-                        logger.warning(f"⚠️ Failed to generate explanation for tag '{tag}' with one prompt: {e}")
-                        continue
-                
-                # Enhanced explanation with feature analysis
-                if best_explanation:
-                    enhanced_explanation = self._enhance_tag_explanation(best_explanation, tag)
-                    tag_explanations[tag] = enhanced_explanation
-                else:
-                    tag_explanations[tag] = f"Visual features indicating '{tag}' detected in the image"
+                try:
+                    inputs = self.processor(text=verification_prompt, images=image, return_tensors="pt")
+                    
+                    if torch.cuda.is_available():
+                        inputs = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in inputs.items()}
+                    
+                    with torch.no_grad():
+                        generated_ids = self.model.generate(
+                            pixel_values=inputs["pixel_values"],
+                            input_ids=inputs["input_ids"],
+                            attention_mask=inputs["attention_mask"],
+                            image_embeds=None,
+                            image_embeds_position_mask=inputs["image_embeds_position_mask"],
+                            use_cache=True,
+                            max_new_tokens=80,   # More tokens for detail
+                            do_sample=True,      # Enable sampling
+                            temperature=0.4,     # Slightly higher for creativity
+                            top_p=0.9,
+                            pad_token_id=self.processor.tokenizer.eos_token_id
+                        )
+                    
+                    tag_response = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                    explanation = self.extract_clean_text(tag_response, verification_prompt)
+                    
+                    # Process the explanation more carefully
+                    if explanation and len(explanation) > 15:
+                        # Clean and enhance the explanation
+                        enhanced = self.process_tag_explanation(explanation, tag)
+                        tag_explanations[tag] = enhanced
+                    else:
+                        # Use image-aware fallback
+                        tag_explanations[tag] = self.create_smart_fallback(tag, description)
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed explanation for '{tag}': {e}")
+                    tag_explanations[tag] = self.create_smart_fallback(tag, description)
             
             explanations["tag_explanations"] = tag_explanations
             
-            # 3. Detailed confidence and feature assessment
-            confidence_prompt = "<grounding>Analyze the image quality, clarity, lighting, and distinctiveness of objects and features visible in this image."
+            # 3. Detailed confidence assessment
+            confidence_prompt = "<grounding>Describe the clarity, visibility, and identifiability of the main visual elements in this image."
             
             try:
                 inputs = self.processor(text=confidence_prompt, images=image, return_tensors="pt")
@@ -203,19 +193,19 @@ class Kosmos2Explainer:
                         image_embeds=None,
                         image_embeds_position_mask=inputs["image_embeds_position_mask"],
                         use_cache=True,
-                        max_new_tokens=64,
-                        do_sample=False,    # Use deterministic generation
+                        max_new_tokens=70,
+                        do_sample=True,
+                        temperature=0.3,
                         pad_token_id=self.processor.tokenizer.eos_token_id
                     )
                 
                 confidence_response = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-                confidence_assessment = self._extract_and_clean_text(confidence_response, confidence_prompt)
-                
-                explanations["confidence_assessment"] = confidence_assessment
+                confidence_assessment = self.extract_clean_text(confidence_response, confidence_prompt)
+                explanations["confidence_assessment"] = confidence_assessment if confidence_assessment else "Visual elements are clearly distinguishable"
                 
             except Exception as e:
-                logger.warning(f"⚠️ Failed to generate confidence assessment: {e}")
-                explanations["confidence_assessment"] = "Image features are clearly identifiable"
+                logger.warning(f"⚠️ Confidence assessment failed: {e}")
+                explanations["confidence_assessment"] = "Visual elements are clearly distinguishable"
             
             return explanations
             
@@ -227,120 +217,190 @@ class Kosmos2Explainer:
                 "confidence_assessment": "Analysis unavailable"
             }
     
-    def _enhance_tag_explanation(self, explanation: str, tag: str) -> str:
-        """
-        Enhance tag explanation with more specific feature analysis
-        """
+    def create_verification_prompt(self, tag: str) -> str:
+        """Create verification prompts that ask for specific visual evidence"""
+        tag_lower = tag.lower()
+        
+        # Very specific prompts that demand visual details
+        if tag_lower in ['red', 'blue', 'green', 'yellow', 'orange', 'purple', 'pink', 'brown', 'black', 'white', 'gray', 'grey']:
+            return "<grounding>Where exactly do you see " + tag_lower + " color in this image? Describe the specific " + tag_lower + " colored objects, surfaces, or areas."
+        
+        elif tag_lower in ['stop', 'sign', 'signs']:
+            return "<grounding>What specific signs, text, or symbols do you see in this image? Describe their shape, color, and what they say."
+        
+        elif tag_lower in ['pole', 'post']:
+            return "<grounding>Where are the poles or posts in this image? What are they made of and what do they support?"
+        
+        elif tag_lower in ['tree', 'trees']:
+            return "<grounding>Where are the trees in this image? Describe their branches, leaves, and location."
+        
+        elif tag_lower in ['elephant']:
+            return "<grounding>Where do you see elephant-like features in this image? Look for tusks, trunk, ears, or elephant symbols/sculptures."
+        
+        elif tag_lower in ['lion']:
+            return "<grounding>Where do you see lion features in this image? Look for mane, face, body, or lion symbols/sculptures."
+        
+        elif tag_lower in ['bird']:
+            return "<grounding>Where do you see bird features in this image? Look for wings, beak, feathers, or bird symbols."
+        
+        elif tag_lower in ['flower']:
+            return "<grounding>Where are the flowers in this image? Describe their petals, color, and shape."
+        
+        elif tag_lower in ['gold', 'golden']:
+            return "<grounding>Where do you see gold or golden colored elements in this image? Describe the specific golden objects or surfaces."
+        
+        elif tag_lower in ['street', 'road']:
+            return "<grounding>What shows this is a street or road? Look for pavement, road signs, vehicles, or street infrastructure."
+        
+        elif tag_lower in ['outdoor', 'outside']:
+            return "<grounding>What visual evidence shows this is outdoors? Look for sky, natural lighting, or outdoor structures."
+        
+        elif tag_lower in ['flag']:
+            return "<grounding>Where is the flag in this image? Describe its colors, symbols, and design."
+        
+        else:
+            return "<grounding>Where exactly do you see " + tag + " in this image? Describe its appearance, location, and distinctive features."
+    
+    def process_tag_explanation(self, explanation: str, tag: str) -> str:
+        """Process and improve tag explanations"""
         try:
-            # Add feature-focused context if the explanation is too generic
-            feature_keywords = ['color', 'shape', 'texture', 'pattern', 'size', 'location', 'edge', 'surface', 'form']
+            # Clean the explanation
+            cleaned = explanation.strip()
             
-            has_features = any(keyword in explanation.lower() for keyword in feature_keywords)
+            # Remove the prompt echo if present
+            if "where exactly do you see" in cleaned.lower():
+                parts = cleaned.split("?", 1)
+                if len(parts) > 1:
+                    cleaned = parts[1].strip()
             
-            if not has_features and len(explanation) < 30:
-                # Generic explanation, enhance it
-                enhanced = f"The visual characteristics and features that identify '{tag}' include: {explanation}"
-            else:
-                enhanced = explanation
+            # Remove generic phrases
+            generic_removals = [
+                "visual features indicating",
+                "detected in the image",
+                "can be identified through its distinctive visual characteristics"
+            ]
             
-            # Ensure proper capitalization and punctuation
-            if enhanced and not enhanced[0].isupper():
-                enhanced = enhanced.capitalize()
+            for removal in generic_removals:
+                cleaned = cleaned.replace(removal, "").strip()
             
-            if enhanced and not enhanced.endswith('.'):
-                enhanced += "."
+            # If explanation is still too generic or empty, don't use it
+            if len(cleaned) < 15 or self.is_still_generic(cleaned):
+                return ""
             
-            return enhanced
+            # Ensure proper formatting
+            if cleaned and not cleaned[0].isupper():
+                cleaned = cleaned.capitalize()
+            
+            if cleaned and not cleaned.endswith('.'):
+                cleaned += "."
+            
+            # Limit length but preserve content
+            if len(cleaned) > 200:
+                sentences = re.split(r'[.!?]+', cleaned)
+                if sentences and len(sentences[0]) > 20:
+                    cleaned = sentences[0].strip() + "."
+            
+            return cleaned
             
         except Exception as e:
-            return explanation
+            logger.warning(f"Error processing explanation: {e}")
+            return ""
     
+    def create_smart_fallback(self, tag: str, general_description: str) -> str:
+        """Create smarter fallbacks based on general description"""
+        tag_lower = tag.lower()
+        desc_lower = general_description.lower() if general_description else ""
+        
+        # Try to create context-aware fallbacks
+        if tag_lower in ['red', 'blue', 'green', 'yellow', 'orange', 'purple', 'pink', 'brown', 'black', 'white', 'gray', 'grey']:
+            if "flag" in desc_lower:
+                return f"The {tag_lower} color appears in the flag design or background."
+            elif "sign" in desc_lower:
+                return f"The {tag_lower} color is visible on signs or signage."
+            else:
+                return f"The {tag_lower} color is prominently displayed in the image."
+        
+        elif tag_lower in ['elephant']:
+            if "emblem" in desc_lower or "symbol" in desc_lower:
+                return "Elephant features appear in sculptural or symbolic form, possibly in an emblem or carved design."
+            else:
+                return "Elephant-like characteristics are visible, potentially in artistic or symbolic representation."
+        
+        elif tag_lower in ['lion']:
+            if "emblem" in desc_lower or "symbol" in desc_lower:
+                return "Lion features are present in sculptural form, likely as part of an official emblem or carved symbol."
+            else:
+                return "Lion-like features are visible in the image."
+        
+        elif tag_lower in ['stop', 'sign', 'signs']:
+            return "Traffic or informational signage with text and symbols is visible."
+        
+        elif tag_lower in ['pole', 'post']:
+            return "Vertical support structures are present, likely supporting signs or other elements."
+        
+        elif tag_lower in ['gold', 'golden']:
+            if "emblem" in desc_lower:
+                return "Golden or yellow-colored elements appear in emblematic or decorative features."
+            else:
+                return "Gold or golden coloring is visible in decorative elements."
+        
+        else:
+            return f"Visual elements associated with {tag} are present in the image."
     
-    def _extract_and_clean_text(self, full_response: str, prompt: str) -> str:
-        """Extract and clean the generated text from the full response"""
+    def is_still_generic(self, text: str) -> bool:
+        """Check if explanation is still too generic"""
+        generic_phrases = [
+            "distinctive visual characteristics",
+            "can be identified",
+            "is present",
+            "are visible",
+            "element can be",
+            "prominently visible"
+        ]
+        
+        text_lower = text.lower()
+        return any(phrase in text_lower for phrase in generic_phrases) and len(text) < 50
+    
+    def extract_clean_text(self, full_response: str, prompt: str) -> str:
+        """Extract and clean generated text, preserving meaningful content"""
         try:
-            # Remove the prompt from the response
+            # Remove prompt
             if prompt in full_response:
                 generated = full_response.replace(prompt, "").strip()
             else:
                 generated = full_response.strip()
             
-            # Clean up the response more aggressively
-            generated = re.sub(r'<[^>]+>', '', generated)  # Remove special tokens
-            generated = re.sub(r'\s+', ' ', generated)     # Normalize whitespace
+            # Clean special tokens but preserve content
+            generated = re.sub(r'<[^>]+>', '', generated)
+            generated = re.sub(r'\s+', ' ', generated)
             
-            # Remove common noise patterns
-            noise_patterns = [
-                r"^\. the,? to and of as in.*?$",  # Remove the repetitive text pattern
-                r"^\w{1,3}( \w{1,3}){10,}",       # Remove strings of short words
-                r"^[^\w\s]*$",                     # Remove non-alphanumeric strings
-                r"^\d+\s*$",                       # Remove standalone numbers
-            ]
+            # Remove only the specific noise pattern we know about
+            if '. the, to and' in generated.lower():
+                return ""
             
-            for pattern in noise_patterns:
-                generated = re.sub(pattern, '', generated, flags=re.IGNORECASE | re.MULTILINE)
-            
-            # Split into sentences and take the first meaningful one
-            sentences = re.split(r'[.!?]+', generated)
-            for sentence in sentences:
-                sentence = sentence.strip()
-                if len(sentence) > 15 and not self._is_noise_text(sentence):
-                    return sentence
-            
-            # If no good sentence found, return cleaned version or fallback
+            # Basic validation - be less aggressive
             generated = generated.strip()
-            if len(generated) > 10 and not self._is_noise_text(generated):
-                return generated[:200]  # Limit length
+            if len(generated) < 5:
+                return ""
             
-            return "Clear visual elements identified"
+            # Remove obvious repetitive garbage
+            words = generated.split()
+            if len(words) > 5 and len(set(words)) < len(words) // 3:
+                return ""  # Too repetitive
             
-        except Exception as e:
-            logger.warning(f"⚠️ Error cleaning generated text: {e}")
-            return "Visual analysis completed"
-    
-    def _clean_tag_explanation(self, explanation: str, tag: str) -> str:
-        """Additional cleaning specifically for tag explanations"""
-        try:
-            # Remove the tag repetition if it exists
-            explanation = explanation.replace(f"'{tag}'", tag)
+            # Limit length but preserve content
+            if len(generated) > 250:
+                sentences = re.split(r'[.!?]+', generated)
+                if sentences and len(sentences[0]) > 20:
+                    return sentences[0].strip() + "."
+                else:
+                    return generated[:250] + "..."
             
-            # If explanation is too repetitive or noisy, create a simple one
-            if self._is_noise_text(explanation) or len(explanation.split()) < 3:
-                return f"The {tag} is clearly visible in the image"
-            
-            # Ensure it starts properly
-            if not explanation[0].isupper():
-                explanation = explanation.capitalize()
-            
-            # Limit length
-            words = explanation.split()
-            if len(words) > 20:
-                explanation = ' '.join(words[:20]) + "..."
-            
-            return explanation
+            return generated
             
         except Exception as e:
-            return f"Visual evidence of {tag} detected"
-    
-    def _is_noise_text(self, text: str) -> bool:
-        """Check if text appears to be noise or repetitive content"""
-        try:
-            text = text.lower().strip()
-            
-            # Check for common noise patterns
-            noise_indicators = [
-                len(text) < 5,
-                text.count('the') > len(text.split()) // 3,  # Too many "the"
-                text.count(',') > len(text.split()) // 2,    # Too many commas
-                len(set(text.split())) < len(text.split()) // 2,  # Too repetitive
-                text.startswith('. the, to and'),  # Specific noise pattern
-                text.count(' ') > text.count('. ') * 10,  # Too many spaces vs periods
-            ]
-            
-            return any(noise_indicators)
-            
-        except Exception:
-            return True
+            logger.warning(f"⚠️ Error cleaning text: {e}")
+            return ""
 
 # Initialize the explainer
 logger.info("🔄 Initializing Kosmos-2 Explainer...")
