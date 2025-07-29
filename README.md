@@ -30,7 +30,6 @@ When you feed images into VisionVault, here's what happens:
 4. **🧮 Fusion Engine** combines all insights into meaningful metadata
 5. **📊 Report Generator** creates publication-ready documentation
 
----
 
 ## 🚀 Getting Started
 
