@@ -94,8 +94,6 @@ Generate executive-level reports with a single command:
 python tags.py --report --pdf-output quarterly_analysis.pdf
 ```
 
----
-
 ## 🏛️ Real-World Applications
 
 <table>
