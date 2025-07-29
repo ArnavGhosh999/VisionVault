@@ -9,7 +9,6 @@
 
 **VisionVault** transforms your image collections into searchable, intelligent archives using cutting-edge computer vision. Built for researchers, institutions, and professionals who need serious image analysis capabilities.
 
----
 
 ## 🎭 What Makes VisionVault Different
 
