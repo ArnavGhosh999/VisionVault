@@ -1,4 +1,4 @@
-# VisionVault 🔮
+<h1 align="center"> VisionVault 🔮</h1>
 
 > *Where Images Become Intelligent Data*
 
