@@ -12,7 +12,7 @@
 <p align="center">
   <strong>Automated image tagging using four-model ensemble architecture with confidence-based tag verification.</strong><br>
   <div align="justify">
-  Comprehensive image analysis pipeline combining multiple state-of-the-art vision models for intelligent tagging, content detection, and detailed visual understanding. VisionVault integrates BLIP captioning, LayoutLMv3 document analysis, ViT-GPT2 descriptions, and InstructBLIP advanced reasoning to deliver professional-grade image analysis with automated report generation.
+  Comprehensive image analysis pipeline combining multiple state-of-the-art vision models for intelligent tagging, content detection, and detailed visual understanding. VisionVault integrates BLIP captioning, LayoutLMv3 document analysis, ViT-GPT2 descriptions / captioning, and InstructBLIP advanced reasoning to deliver professional-grade image analysis with automated report generation.
   </div>
 </p>
 
